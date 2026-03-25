@@ -9,7 +9,7 @@
 - 歌曲无损变速
 - 导入大量（几千首）歌曲时播放不卡顿
 
-<img src="main.png" height="400"/>
+<img src="main.png" height="600"/>
 
 ## 安装和运行
 
