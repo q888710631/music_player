@@ -1,0 +1,6 @@
+/*@import './base.css';*/
+@import "tailwindcss";
+
+body {
+  user-select: none;
+}
