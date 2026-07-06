@@ -2,13 +2,15 @@
   <div class="common-layout">
     <el-container style="height: 100vh">
       <!-- 顶部播放器 Header -->
-      <el-header height="290px" style="padding-top: 16px">
+      <el-header height="330px" style="padding-top: 16px">
         <!-- 当前播放信息 -->
-        <div class="now-playing">
-          <h2 class="track-title" v-if="currentTrack" @click="openFromPlaylist(currentIndex)">
+        <div class="now-playing" v-if="currentTrack" @click="openFromPlaylist(currentIndex)">
+          <h2 class="track-title">
             {{ currentTrack.filename || '未知标题' }}
           </h2>
-          <h2 class="track-title" v-else>请选择音乐文件开始播放</h2>
+        </div>
+        <div class="now-playing" v-else>
+          <h2 class="track-title">请选择音乐文件开始播放</h2>
         </div>
 
         <!-- 进度条 -->
@@ -76,8 +78,10 @@
 
         <!-- 工具栏 -->
         <div class="toolbar">
-          <el-button @click="selectFiles" icon="Plus">添加文件</el-button>
-          <el-button @click="selectFolder" icon="Folder">扫描文件夹</el-button>
+          <el-button @click="selectFiles" icon="Plus" class="vuetify-style-btn">添加文件</el-button>
+          <el-button @click="selectFolder" icon="Folder" class="vuetify-style-btn"
+            >扫描文件夹</el-button
+          >
           <el-button
             @click="clearPlaylist"
             :disabled="playlist.length === 0"
@@ -92,15 +96,6 @@
             icon="Document"
             >歌词</el-button
           >
-
-          <input
-            type="file"
-            ref="fileInput"
-            @change="handleFileSelect"
-            accept="audio/*,.mp3,.wav,.flac,.aac,.m4a,.ogg"
-            multiple
-            style="display: none"
-          />
         </div>
 
         <el-slider
@@ -126,14 +121,12 @@
               <span class="separator">/</span>
               <span class="total-count">{{ playlist.length }}</span>
             </div>
-
           </el-tooltip>
 
           <!--          <div style="margin-left: 8px; display: flex; gap: 4px">-->
           <!--            <el-button @click="togglePlaybackRate">倍速{{ playbackRate }}x</el-button>-->
           <!--          </div>-->
         </div>
-
       </el-header>
 
       <!-- 下方播放列表 Main -->
@@ -247,7 +240,6 @@ const loadingMessage = ref('')
 // 歌词弹窗状态
 const lyricsDialogVisible = ref(false)
 
-const fileInput = ref<HTMLInputElement>()
 const audioElement = ref<HTMLAudioElement | null>(null)
 const tableRef = ref<any>(null)
 let progressInterval: NodeJS.Timeout | null = null
@@ -638,8 +630,70 @@ const togglePlaybackRate = () => {
   changePlaybackRate(rates[nextIndex])
 }
 
-const selectFiles = () => {
-  fileInput.value?.click()
+const selectFiles = async () => {
+  try {
+    isLoading.value = true
+    loadingMessage.value = '正在选择文件...'
+
+    const result = await window.api.selectFiles()
+    if (result && result.length > 0) {
+      const newTracks: Track[] = []
+      let skippedCount = 0
+
+      for (const file of result) {
+        // 检查文件是否已存在
+        if (isFileDuplicate(file.name)) {
+          skippedCount++
+          continue
+        }
+
+        const metadata = await window.api.getAudioMetadata({
+          filename: file.name,
+          filePath: file.path
+        })
+
+        const track: Track = {
+          id: generateId(),
+          filename: file.name,
+          path: file.path,
+          title: metadata.title || file.name.replace(/\.[^/.]+$/, ''),
+          artist: metadata.artist,
+          album: metadata.album,
+          duration: metadata.duration,
+          size: file.size
+        }
+        newTracks.push(track)
+      }
+
+      playlist.value.push(...newTracks)
+
+      // 强制触发响应式更新和虚拟表格刷新
+      await nextTick()
+      const savedIndex = currentIndex.value
+      const temp = [...playlist.value]
+      playlist.value = []
+      await nextTick()
+      playlist.value = temp
+      currentIndex.value = savedIndex
+
+      manualSaveState()
+
+      if (skippedCount > 0) {
+        showToast(
+          `添加完成！新增 ${newTracks.length} 个文件，跳过了 ${skippedCount} 个重复文件`,
+          'info',
+          4000
+        )
+      } else {
+        showToast(`添加完成！新增 ${newTracks.length} 个文件`, 'success')
+      }
+    }
+  } catch (error) {
+    console.error('添加文件失败:', error)
+    showToast('添加文件失败: ' + (error as Error).message, 'error')
+  } finally {
+    isLoading.value = false
+  }
 }
 
 const selectFolder = async () => {
@@ -676,6 +730,18 @@ const selectFolder = async () => {
 
       playlist.value.push(...newTracks)
 
+      // 强制触发响应式更新和虚拟表格刷新
+      await nextTick()
+      // 保存当前播放索引，防止被 watch 重置
+      const savedIndex = currentIndex.value
+      // 重新赋值以触发计算属性的重新计算
+      const temp = [...playlist.value]
+      playlist.value = []
+      await nextTick()
+      playlist.value = temp
+      // 恢复播放索引
+      currentIndex.value = savedIndex
+
       // 手动触发保存
       manualSaveState()
 
@@ -689,89 +755,10 @@ const selectFolder = async () => {
       } else {
         showToast(`扫描完成！发现 ${newTracks.length} 个文件`, 'success')
       }
-
-      if (currentIndex.value === -1 && newTracks.length > 0) {
-        currentIndex.value = 0
-      }
     }
   } catch (error) {
     console.error('扫描文件夹失败:', error)
     alert('扫描文件夹失败: ' + (error as Error).message)
-  } finally {
-    isLoading.value = false
-  }
-}
-
-const handleFileSelect = async (event: Event) => {
-  const files = (event.target as HTMLInputElement).files
-  if (!files) return
-
-  try {
-    isLoading.value = true
-    loadingMessage.value = '正在加载音频文件...'
-
-    const newTracks: Track[] = []
-    let skippedCount = 0
-
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i]
-
-      // 检查文件是否已存在
-      if (isFileDuplicate(file.name)) {
-        skippedCount++
-        continue
-      }
-
-      const arrayBuffer = await file.arrayBuffer()
-      const uint8Array = new Uint8Array(arrayBuffer)
-
-      const metadata = await window.api.getAudioMetadata({
-        filename: file.name,
-        data: uint8Array
-      })
-
-      const track: Track = {
-        id: generateId(),
-        filename: file.name,
-        title: metadata.title || file.name.replace(/\.[^/.]+$/, ''),
-        artist: metadata.artist,
-        album: metadata.album,
-        duration: metadata.duration,
-        size: file.size,
-        data: uint8Array
-      }
-      newTracks.push(track)
-    }
-
-    playlist.value.push(...newTracks)
-
-    // 手动触发保存
-    manualSaveState()
-
-    // 显示重复文件提示
-    if (skippedCount > 0) {
-      showToast(`跳过了 ${skippedCount} 个重复文件`, 'info')
-    } else if (newTracks.length > 0) {
-      showToast(`成功添加 ${newTracks.length} 个文件`, 'success')
-    }
-
-    if (currentIndex.value === -1 && newTracks.length > 0) {
-      currentIndex.value = playlist.value.length - newTracks.length
-      // 自动播放第一个添加的文件
-      setTimeout(() => {
-        playTrack(currentIndex.value).catch((error) => {
-          console.error('自动播放失败:', error)
-        })
-      }, 500)
-    }
-
-    // 清空文件输入
-    if (fileInput.value) {
-      fileInput.value.value = ''
-    }
-  } catch (error) {
-    console.error('加载文件失败:', error)
-    alert('加载文件失败: ' + (error as Error).message)
   } finally {
     isLoading.value = false
   }
@@ -815,8 +802,13 @@ const playTrack = async (index: number) => {
     if (canUseCache) {
       // 使用内存中的数据
       audioData = trackData
+    } else if (track.data) {
+      // 使用 track 中保存的音频数据（添加文件的情况）
+      audioData = track.data
+      // 缓存当前音乐的数据,避免重复读取
+      trackData = audioData
     } else if (trackPath) {
-      // 读取文件内容
+      // 读取文件内容（扫描文件夹的情况）
       const readStart = performance.now()
 
       // 使用 nextTick 让 Vue 先完成响应式更新，避免阻塞
@@ -845,6 +837,9 @@ const playTrack = async (index: number) => {
         case 'flac':
           mimeType = 'audio/flac'
           break
+        case 'ape':
+          mimeType = 'audio/wav' // APE 在主进程中已转换为 WAV
+          break
         case 'aac':
           mimeType = 'audio/aac'
           break
@@ -868,6 +863,9 @@ const playTrack = async (index: number) => {
 
     audioElement.value.volume = isMuted.value ? 0 : volume.value / 100
     audioElement.value.playbackRate = playbackRate.value
+
+    // 设置循环属性（单曲循环时使用 loop，否则不循环）
+    audioElement.value.loop = repeatMode.value === 'one'
 
     currentTime.value = 0
     progressPercentage.value = 0
@@ -900,9 +898,8 @@ const playTrack = async (index: number) => {
           audioElement.value!.addEventListener(
             'ended',
             () => {
-              if (repeatMode.value === 'one') {
-                audioElement.value?.play()
-              } else {
+              // 单曲循环由 audio.loop 属性处理，这里只需要处理非循环模式
+              if (repeatMode.value !== 'one') {
                 nextTrack()
               }
             },
@@ -1125,18 +1122,11 @@ const startProgressTracking = async () => {
 }
 
 const removeFromPlaylist = (index: number) => {
-  // 如果删除的是正在播放的音乐,需要清理缓存并停止播放
+  // 如果删除的是正在播放的音乐,需要清理缓存并停止播放，并重置索引
   if (index === currentIndex.value) {
     stopPlayback()
     trackData = null as any // 清理缓存数据
-
-    if (playlist.value.length === 1) {
-      currentIndex.value = -1
-    } else if (index === playlist.value.length - 1) {
-      // 删除最后一首,索引减1
-      currentIndex.value--
-    }
-    // 如果删除的不是最后一首,currentIndex保持不变,指向下一首
+    currentIndex.value = -1 // 重置为 -1，不自动播放下一首
   } else if (index < currentIndex.value) {
     // 删除的是前面的音乐,当前索引需要减1
     currentIndex.value--
@@ -1243,7 +1233,7 @@ const scrollToCurrentTrack = () => {
             setTimeout(executeScroll, 1)
           } else {
             // 全部完成，显示提示
-            showToast(`已定位到第 ${sortedIndex + 1} 首`, 'success', 1500)
+            //showToast(`已定位到第 ${sortedIndex + 1} 首`, 'success', 1500)
           }
         }
 
@@ -1301,6 +1291,13 @@ watch(volume, (newVolume) => {
   updateVolume()
 })
 
+// 监听循环模式变化，更新音频元素的 loop 属性
+watch(repeatMode, (newMode) => {
+  if (audioElement.value) {
+    audioElement.value.loop = newMode === 'one'
+  }
+})
+
 // 监听窗口大小变化
 onMounted(() => {
   restoreState()
@@ -1326,6 +1323,15 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* 播放器头部 - 渐变背景 - Primary 蓝色（更暗版本） */
+.now-playing {
+  background: linear-gradient(135deg, #337ecc 0%, #409eff 100%);
+  box-shadow: 0 2px 12px rgba(51, 126, 204, 0.4);
+  padding: 20px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
 .enhanced-music-player {
   padding: 0;
   height: 100vh;
@@ -1372,10 +1378,15 @@ onUnmounted(() => {
   align-items: center;
 }
 
-.now-playing {
-  margin-bottom: 25px;
-  flex: 0 0 auto;
-  max-width: 100%;
+/* Vuetify 风格按钮 */
+.vuetify-style-btn {
+  text-transform: none !important;
+  padding: 0 16px;
+  height: 32px;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.009375em;
+  border-radius: 4px;
 }
 
 .now-playing.empty {
@@ -1393,12 +1404,13 @@ onUnmounted(() => {
   font-size: 24px;
   font-weight: 600;
   margin: 0 0 8px 0;
-  color: #333;
+  color: #ffffff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
   word-break: break-all;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 .track-artist {
@@ -1422,7 +1434,7 @@ onUnmounted(() => {
 }
 
 .time-display {
-  font-size: 12px;
+  font-size: 14px;
   color: #666;
   font-family: monospace;
   min-width: 40px;
@@ -1715,5 +1727,11 @@ onUnmounted(() => {
     transform: translateX(100%);
     opacity: 0;
   }
+}
+
+/* 修改滑块的大小 */
+:deep(.el-slider) {
+  --el-slider-button-size: 16px; /* 默认是 16px */
+  --el-slider-button-wrapper-size: 36px; /* 外部热区大小，建议同步调大 */
 }
 </style>

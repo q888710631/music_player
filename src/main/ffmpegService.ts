@@ -42,14 +42,43 @@ class FFmpegService {
 
   /**
    * 读取文件内容
+   * APE 格式浏览器不支持，自动转换为 WAV
    */
   async readFileContent(filePath: string): Promise<Uint8Array> {
     try {
+      const ext = filePath.toLowerCase().split('.').pop()
+      if (ext === 'ape') {
+        return await this.convertApeToWav(filePath)
+      }
       const fileContent = await readFile(filePath)
       return new Uint8Array(fileContent)
     } catch (error) {
       console.error('读取文件内容失败:', error)
       throw new Error(`无法读取文件内容: ${error}`)
+    }
+  }
+
+  /**
+   * 将 APE 文件转换为 WAV（浏览器 Audio 元素不支持 APE 解码）
+   */
+  private async convertApeToWav(apeFilePath: string): Promise<Uint8Array> {
+    const outputPath = join(this.tempDir, `ape-${Date.now()}.wav`)
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg(apeFilePath)
+          .output(outputPath)
+          .format('wav')
+          .on('end', () => resolve())
+          .on('error', (err) => reject(new Error(`APE转WAV失败: ${err.message}`)))
+          .run()
+      })
+
+      const wavData = await readFile(outputPath)
+      return new Uint8Array(wavData)
+    } finally {
+      // 清理临时 WAV 文件
+      await unlink(outputPath).catch(() => {})
     }
   }
 
@@ -120,7 +149,7 @@ class FFmpegService {
     return new Promise((resolve, reject) => {
       const command = ffmpeg(inputPath)
         .output(outputPath)
-        .audioFormat(format)
+        .format(format)
         .on('end', () => {
           resolve(outputPath)
         })
@@ -138,10 +167,106 @@ class FFmpegService {
   }
 
   /**
+   * 从 FLAC 文件提取内嵌歌词
+   */
+  async getFlacLyrics(filePath: string): Promise<string | null> {
+    try {
+      console.log('提取 FLAC 歌词，文件路径:', filePath)
+
+      // 不使用 shell 模式，直接传递参数数组，避免路径被 shell 错误解析
+      const { spawn } = await import('child_process')
+
+      return new Promise((resolve) => {
+        const ffprobe = spawn('ffprobe', [
+          '-hide_banner',
+          '-show_format',
+          '-print_format',
+          'json',
+          filePath  // 直接传递，spawn 会正确处理
+        ], {
+          windowsHide: true,
+          shell: false  // 关闭 shell 模式，避免路径被错误解析
+        })
+
+        let stdout = ''
+        let stderr = ''
+
+        ffprobe.stdout.on('data', (data) => {
+          stdout += data.toString('utf8')
+        })
+
+        ffprobe.stderr.on('data', (data) => {
+          stderr += data.toString('utf8')
+        })
+
+        ffprobe.on('close', (code) => {
+          if (code !== 0) {
+            console.error('FFprobe 执行失败，退出码:', code)
+            if (stderr) {
+              console.error('错误信息:', stderr)
+            }
+            resolve(null)
+            return
+          }
+
+          if (!stdout || stdout.trim() === '') {
+            console.log('FFprobe 返回空输出')
+            resolve(null)
+            return
+          }
+
+          try {
+            const metadata = JSON.parse(stdout)
+            const tags = metadata.format?.tags || {}
+
+            console.log('找到的标签:', Object.keys(tags))
+
+            // 尝试读取常见的歌词标签
+            const lyrics = tags.LYRICS ||
+                           tags.lyrics ||
+                           tags.Lyrics ||
+                           tags['LYRICSTEXT'] ||
+                           tags.lyricstext ||
+                           tags.UNSYNCEDLYRICS ||
+                           tags.unsyncedlyrics ||
+                           tags['unsynced lyrics'] ||
+                           null
+
+            if (lyrics && lyrics.length > 10) {
+              console.log('✅ 成功提取 FLAC 歌词，长度:', lyrics.length)
+              console.log('📝 歌词预览（前200字符）:', lyrics.substring(0, 200))
+              resolve(lyrics)
+            } else if (lyrics) {
+              console.log('⚠️ 歌词内容过短（长度:', lyrics.length, '），使用外部 .lrc 文件')
+              resolve(null)
+            } else {
+              console.log('❌ 未找到 FLAC 内嵌歌词')
+              resolve(null)
+            }
+          } catch (parseError) {
+            console.error('解析 FFprobe JSON 输出失败:', parseError)
+            console.error('原始输出:', stdout.substring(0, 500))
+            resolve(null)
+          }
+        })
+
+        ffprobe.on('error', (err) => {
+          console.error('启动 FFprobe 失败:', err.message)
+          console.error('错误代码:', (err as any).code)
+          resolve(null)
+        })
+      })
+    } catch (error) {
+      console.error('提取 FLAC 歌词失败:', error)
+      return null
+    }
+  }
+
+  /**
    * 获取支持的音频格式
    */
   getSupportedFormats(): string[] {
-    return ['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg', 'webm']
+    return ['mp3', 'wav', 'flac', 'ape', 'aac', 'm4a', 'ogg', 'webm']
   }
 
   /**

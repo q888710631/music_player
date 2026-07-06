@@ -5,6 +5,7 @@ import { extname } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import FFmpegService from './ffmpegService'
+import axios from 'axios'
 
 // 初始化 FFmpeg 服务
 const ffmpegService = new FFmpegService()
@@ -111,6 +112,51 @@ app.whenReady().then(() => {
     }
   })
 
+  // 选择单个或多个音频文件
+  ipcMain.handle('select-files', async () => {
+    try {
+      const result = await dialog.showOpenDialog({
+        properties: ['openFile', 'multiSelections'],
+        title: '选择音频文件',
+        filters: [
+          {
+            name: '音频文件',
+            extensions: ['mp3', 'wav', 'flac', 'ape', 'aac', 'm4a', 'ogg', 'webm']
+          },
+          { name: '所有文件', extensions: ['*'] }
+        ]
+      })
+
+      if (result.canceled || !result.filePaths.length) {
+        return []
+      }
+
+      // 获取文件的详细信息
+      const { stat } = await import('fs/promises')
+      const { basename } = await import('path')
+
+      const audioFiles = []
+
+      for (const filePath of result.filePaths) {
+        try {
+          const fileStat = await stat(filePath)
+          audioFiles.push({
+            name: basename(filePath),
+            path: filePath,
+            size: fileStat.size
+          })
+        } catch (err) {
+          console.warn(`无法访问文件 ${filePath}:`, err)
+        }
+      }
+
+      return audioFiles
+    } catch (error) {
+      console.error('选择文件失败:', error)
+      throw new Error(`选择文件失败: ${error}`)
+    }
+  })
+
   // 读取文件内容
   ipcMain.handle('read-file-content', async (_, { filePath }) => {
     try {
@@ -178,6 +224,44 @@ app.whenReady().then(() => {
     }
   })
 
+  // 从 FLAC 文件提取内嵌歌词
+  ipcMain.handle('read-flac-lyrics', async (_, audioFilePath: string) => {
+    try {
+      const { extname } = await import('path')
+      const ext = extname(audioFilePath).toLowerCase()
+
+      // 只处理 FLAC 文件
+      if (ext !== '.flac') {
+        return null
+      }
+
+      const lyrics = await ffmpegService.getFlacLyrics(audioFilePath)
+      return lyrics
+
+    } catch (error: any) {
+      console.error('读取 FLAC 歌词失败:', error)
+      // 不抛出错误，返回 null 让调用者回退到 .lrc 文件
+      return null
+    }
+  })
+
+  // 通过 URL 获取页面内容
+  ipcMain.handle('fetch-url', async (_, url: string) => {
+    return await fetchUrl(url);
+  })
+
+  // 保存文件内容
+  ipcMain.handle('save-file', async (_, { filePath, content }) => {
+    try {
+      const { writeFile } = await import('fs/promises')
+      await writeFile(filePath, content, 'utf-8')
+      return { success: true }
+    } catch (error: any) {
+      console.error('保存文件失败:', error)
+      throw new Error(`保存文件失败: ${error?.message}`)
+    }
+  })
+
   createWindow()
 
   app.on('activate', function () {
@@ -213,7 +297,7 @@ async function scanFolderForAudioFiles(folderPath: string): Promise<
     size: number
   }>
 > {
-  const supportedExtensions = ['.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg', '.webm']
+  const supportedExtensions = ['.mp3', '.wav', '.flac', '.ape', '.aac', '.m4a', '.ogg', '.webm']
   const audioFiles: Array<{ name: string; path: string; size: number }> = []
 
   try {
@@ -249,6 +333,29 @@ async function scanFolderForAudioFiles(folderPath: string): Promise<
   } catch (error) {
     console.error('扫描文件夹失败:', error)
     throw new Error(`扫描文件夹失败: ${error}`)
+  }
+}
+
+
+async function fetchUrl(url: string): Promise<any> {
+  try {
+    const response = await axios.get(url, {
+      timeout: 10000, // 10秒超时
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    })
+
+    return {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+      data: response.data // 返回页面 body 内容
+    }
+  } catch (error: any) {
+    console.error('获取 URL 内容失败:', error)
+    throw new Error(`获取 URL 内容失败: ${error?.message}`)
   }
 }
 

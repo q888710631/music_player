@@ -22,5 +22,8 @@ interface Window {
     readFileContent: (data: { filePath: string }) => Promise<Uint8Array>
     getSupportedFormats: () => Promise<string[]>
     openInFileExplorer: (filePath: string) => Promise<void>
+    readLyricsFile: (lrcFilePath: string) => Promise<string | null>
+    readFlacLyrics: (audioFilePath: string) => Promise<string | null>
+    fetchUrl: (url: string) => Promise<any>
   }
 }

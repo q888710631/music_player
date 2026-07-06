@@ -8,11 +8,15 @@ export default defineConfig({
   main: {},
   preload: {},
   renderer: {
+    server: {
+      port: 5278,
+      strictPort: false
+    },
     resolve: {
       alias: {
         '@renderer': resolve('src/renderer/src')
       }
     },
-    plugins: [vue(),tailwindcss()]
+    plugins: [vue(), tailwindcss()]
   }
 })

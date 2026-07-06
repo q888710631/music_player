@@ -14,6 +14,9 @@ const api = {
   // 选择文件夹并扫描音频文件
   selectFolder: () => ipcRenderer.invoke('select-folder'),
 
+  // 选择单个或多个音频文件
+  selectFiles: () => ipcRenderer.invoke('select-files'),
+
   // 读取文件内容
   readFileContent: (data: { filePath: string }) =>
     ipcRenderer.invoke('read-file-content', data),
@@ -27,7 +30,18 @@ const api = {
 
   // 读取歌词文件
   readLyricsFile: (lrcFilePath: string) =>
-    ipcRenderer.invoke('read-lyrics-file', lrcFilePath)
+    ipcRenderer.invoke('read-lyrics-file', lrcFilePath),
+
+  // 从 FLAC 文件提取内嵌歌词
+  readFlacLyrics: (audioFilePath: string) =>
+    ipcRenderer.invoke('read-flac-lyrics', audioFilePath),
+
+  // 通过 URL 获取页面内容
+  fetchUrl: (url: string) => ipcRenderer.invoke('fetch-url', url),
+
+  // 保存文件内容
+  saveFile: (data: { filePath: string; content: string }) =>
+    ipcRenderer.invoke('save-file', data)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to
